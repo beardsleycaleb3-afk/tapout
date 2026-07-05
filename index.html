@@ -1,242 +1,135 @@
 <!DOCTYPE html>
-<!--
-CONTRACT — index.html (Root / Composition Layer)
-1. does:         Provides the DOM shell (canvas, HUD, menus, controls) and loads the modular game.
-2. owns:         The <canvas>, the touch control DOM, the CRT overlay, and the <style> presentation layer.
-3. needs:        src/boot/boot.js as a module entry; manifest.json; assets/fighter_sheet.png (loaded
-                  indirectly via spriteAtlas.js). No CDN, no build step.
-4. inputs:       Touch events from the device only (handled inside src/input/input.js). This file
-                  contains zero onclick/onmousedown/onkeydown attributes and no <input> fields.
-5. outputs:      A rendered page that boot.js then brings to life.
-6. connectsTo:   manifest.json (PWA identity), sw.js (offline layer, registered from src/boot/boot.js),
-                  src/boot/boot.js (single module entry).
-7. helps:        Gives every module in src/ a shared DOM to attach to.
-8. returns:      Nothing — it is the terminal composition root, not a module other files import.
-9. starts:       Loads src/boot/boot.js as type="module", which self-invokes run() on DOMContentLoaded.
-10. finishes:    Never finishes on its own; ends only when the tab/app is closed.
-
-ANDROID CHROME ONLY — NO APPLE, NO DESKTOP FALLBACK:
-This document intentionally omits apple-touch-icon, apple-mobile-web-app-capable, and any other
-iOS/Safari-specific meta tags. It targets Android Chrome exclusively at a fixed 350x550 portrait
-viewport. There is no mouse or keyboard interaction path anywhere in this file or in src/ — every
-control is a touch target, and none of them degrade to a clickable-with-a-mouse fallback; they
-simply also happen to respond to touchstart the way any touch surface does, and nothing else.
--->
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=350, height=550, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<meta name="theme-color" content="#060e0a">
-<title>MOBATTLE</title>
-<link rel="manifest" href="./manifest.json">
-<link rel="icon" href="./icons/icon-192.png">
-<style>
-  /* ============================================================
-     CONTRACT — <style> (Presentation Shell Layer)
-     1. does:      Fixes the game to a 350x550 phosphor-CRT viewport, styles HUD/menus/controls.
-     2. owns:      All visual styling; no inline styles in any src/ module.
-     3. needs:     Monospace fallback stack (no external font fetch — offline-safe).
-     4. inputs:    Nothing — pure declarative styling.
-     5. outputs:   Computed CSS applied to DOM elements defined below.
-     6. connects:  #app root, #screen canvas, .hud, .controls, .menu elements.
-     7. helps:     Keeps the retro/CRT identity consistent across every scene.
-     8. returns:   N/A.
-     9. starts:    Applies the instant the DOM parses.
-     10. finishes: Never — lives for the page's lifetime.
-     ============================================================ */
-  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; user-select: none; }
-  html, body {
-    margin: 0; padding: 0; width: 100%; height: 100%;
-    background: #000; overflow: hidden;
-    font-family: 'Share Tech Mono', 'VT323', 'Courier New', monospace;
-    touch-action: none;
-  }
-  #app {
-    position: relative;
-    width: 350px; height: 550px;
-    margin: 0 auto;
-    background: #060e0a;
-    overflow: hidden;
-    box-shadow: 0 0 40px rgba(57,255,140,0.15);
-  }
-  #screen { position: absolute; top: 0; left: 0; width: 350px; height: 550px; image-rendering: pixelated; }
-  .scanlines {
-    position: absolute; inset: 0; pointer-events: none; z-index: 50;
-    background: repeating-linear-gradient(
-      to bottom, rgba(0,0,0,0.0) 0px, rgba(0,0,0,0.15) 1px, rgba(0,0,0,0.0) 2px
-    );
-    mix-blend-mode: multiply;
-  }
-  .crt-vignette {
-    position: absolute; inset: 0; pointer-events: none; z-index: 51;
-    box-shadow: inset 0 0 60px rgba(0,0,0,0.65);
-  }
-  .hud {
-    position: absolute; top: 0; left: 0; width: 350px; height: 56px;
-    z-index: 20; pointer-events: none;
-    color: #39ff8c; font-size: 11px; padding: 6px 8px;
-  }
-  .bar-track { width: 132px; height: 12px; border: 1px solid #39ff8c; background: #041006; }
-  .bar-fill { height: 100%; background: linear-gradient(90deg,#0f0,#39ff8c); transition: width 0.15s linear; }
-  .bar-fill.low { background: linear-gradient(90deg,#ff3b3b,#ff8a3b); }
-  .name-row { display: flex; justify-content: space-between; }
-  .p2 .bar-track { margin-left: auto; }
-  .p2 .bar-fill { float: right; }
-  .round-pips { display: flex; gap: 4px; margin-top: 2px; }
-  .pip { width: 8px; height: 8px; border: 1px solid #39ff8c; }
-  .pip.won { background: #39ff8c; }
-  .p2 .round-pips { justify-content: flex-end; }
-  .timer {
-    position: absolute; top: 4px; left: 50%; transform: translateX(-50%);
-    font-size: 20px; color: #eaffea; text-shadow: 0 0 6px #39ff8c;
-  }
-  .kchip { position:absolute; top: 26px; left:50%; transform:translateX(-50%); font-size:10px; color:#8fffb8; opacity:0.9; }
-  .meter-track { width: 80px; height: 6px; border: 1px solid #ff8a3b; background: #1a0e06; margin-top: 3px; }
-  .meter-fill { height: 100%; width: 0%; background: #ff8a3b; transition: width 0.15s linear; }
-  .meter-fill.ready { background: #ffdd55; box-shadow: 0 0 6px #ffdd55; }
-  .record-line { font-size: 11px; color: #8fffb8; margin-top: -12px; margin-bottom: 18px; letter-spacing: 1px; }
-
-  .controls {
-    position: absolute; bottom: 0; left: 0; width: 350px; height: 150px;
-    z-index: 30; display: flex; justify-content: space-between; align-items: flex-end; padding: 10px;
-  }
-  .stick {
-    width: 100px; height: 100px; border-radius: 50%;
-    border: 2px solid #39ff8c33; background: radial-gradient(circle, #0c1a12 0%, #060e0a 70%);
-    position: relative; touch-action: none;
-  }
-  .stick-nub {
-    position: absolute; width: 40px; height: 40px; border-radius: 50%;
-    background: #39ff8c; opacity: 0.85; top: 30px; left: 30px;
-    box-shadow: 0 0 10px #39ff8c;
-  }
-  .action-grid {
-    display: grid; grid-template-columns: 48px 48px; grid-template-rows: 48px 48px;
-    gap: 8px;
-  }
-  .abtn {
-    border: 2px solid #39ff8c; border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 18px; color: #eaffea; background: #0c1a12cc;
-    touch-action: none;
-  }
-  .abtn.pressed { background: #39ff8c; color: #041006; }
-  .abtn.block { border-color: #6fb8ff; }
-  .abtn.block.pressed { background: #6fb8ff; }
-  .abtn.special { border-color: #ff8a3b; }
-  .abtn.special.pressed { background: #ff8a3b; }
-
-  .menu {
-    position: absolute; inset: 0; z-index: 40;
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    color: #39ff8c; text-align: center; padding: 16px;
-    background: radial-gradient(circle at 50% 30%, #0c1a12 0%, #020504 100%);
-  }
-  .menu.hidden { display: none; }
-  .title-glow {
-    font-size: 34px; letter-spacing: 4px; color: #eaffea;
-    text-shadow: 0 0 10px #39ff8c, 0 0 22px #39ff8c88;
-    margin-bottom: 4px;
-  }
-  .sub-glow { font-size: 12px; color: #8fffb8; margin-bottom: 22px; letter-spacing: 2px; }
-  .menu-btn {
-    width: 220px; padding: 10px; margin: 6px 0;
-    border: 2px solid #39ff8c; color: #eaffea; background: #0c1a12;
-    font-family: inherit; font-size: 14px; letter-spacing: 2px;
-  }
-  .menu-btn.pressed { background: #39ff8c; color: #041006; }
-  .vs-row { display: flex; align-items: center; justify-content: center; gap: 18px; margin: 10px 0 22px; }
-  .vs-chip { width: 78px; height: 78px; border: 2px solid #39ff8c66; background: #0c1a12;
-    display: flex; align-items: center; justify-content: center; font-size: 10px; color: #8fffb8; }
-  .vs-word { font-size: 16px; color: #ff8a3b; text-shadow: 0 0 8px #ff8a3b; }
-  .boot-line { font-size: 11px; color: #39ff8c; margin: 2px 0; }
-  .flash-banner {
-    position:absolute; top: 45%; left:0; width:100%; text-align:center; z-index: 45;
-    font-size: 22px; color:#eaffea; text-shadow:0 0 14px #39ff8c; letter-spacing:3px;
-    pointer-events:none;
-  }
-</style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=350, height=550, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#060e0a">
+  <title>MOBATTLE</title>
+  <link rel="manifest" href="./manifest.json">
+  <style>
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; user-select: none; }
+    html, body {
+      margin: 0; padding: 0; width: 100%; height: 100%;
+      background: #000; overflow: hidden; font-family: 'Courier New', monospace;
+      touch-action: none;
+    }
+    body {
+      display: flex; align-items: center; justify-content: center;
+    }
+    #app {
+      position: relative; width: 350px; height: 550px; background: #060e0a;
+      border: 2px solid #39ff8c; box-shadow: 0 0 32px rgba(57,255,140,0.2);
+      overflow: hidden;
+    }
+    #screen { display: block; width: 350px; height: 550px; image-rendering: pixelated; }
+    .overlay, .hud, .controls {
+      position: absolute; left: 0; right: 0; pointer-events: none;
+    }
+    .overlay { inset: 0; display: flex; align-items: center; justify-content: center; padding: 18px; z-index: 40; }
+    .panel {
+      width: 100%; max-width: 280px; padding: 18px; border: 2px solid #39ff8c;
+      background: rgba(6, 14, 10, 0.9); text-align: center; color: #eaffea;
+    }
+    .panel h1, .panel h2 { margin: 0 0 8px; letter-spacing: 3px; color: #39ff8c; }
+    .panel p, .panel .sub { color: #8fffb8; margin: 6px 0; font-size: 12px; }
+    .menu-btn {
+      margin-top: 12px; border: 2px solid #39ff8c; background: #0c1a12; color: #eaffea;
+      padding: 10px 14px; font: inherit; letter-spacing: 2px; width: 100%; touch-action: none;
+      pointer-events: auto;
+    }
+    .menu-btn.pressed { background: #39ff8c; color: #041006; }
+    .hidden { display: none !important; }
+    .hud {
+      top: 0; padding: 10px 12px; z-index: 20; display: flex; flex-direction: column; gap: 6px;
+    }
+    .bar-row { display: flex; align-items: center; gap: 8px; }
+    .bar-row.right { justify-content: flex-end; }
+    .label { color: #39ff8c; font-size: 11px; letter-spacing: 1px; }
+    .bar {
+      width: 140px; height: 10px; border: 1px solid #39ff8c; background: rgba(4, 16, 6, 0.95);
+      overflow: hidden;
+    }
+    .fill {
+      width: 100%; height: 100%; background: linear-gradient(90deg, #0f0, #39ff8c);
+      transition: width 0.15s linear;
+    }
+    .fill.enemy { background: linear-gradient(90deg, #39ff8c, #ff8a3b); }
+    .status { color: #eaffea; font-size: 11px; text-align: center; letter-spacing: 1px; }
+    .hud-stats { display: flex; justify-content: space-between; align-items: center; font-size: 10px; color: #8fffb8; letter-spacing: 1px; }
+    .hud-stats .pill { border: 1px solid #39ff8c; padding: 2px 6px; }
+    .controls {
+      bottom: 0; padding: 12px; display: flex; justify-content: space-between; align-items: flex-end; z-index: 30;
+    }
+    .stick {
+      width: 96px; height: 96px; border-radius: 50%; border: 2px solid #39ff8c; position: relative;
+      background: radial-gradient(circle, #0c1a12 0%, #060e0a 70%); pointer-events: auto; touch-action: none;
+    }
+    .stick-nub {
+      position: absolute; width: 36px; height: 36px; border-radius: 50%; background: #39ff8c;
+      top: 30px; left: 30px; box-shadow: 0 0 10px #39ff8c;
+    }
+    .action-grid {
+      display: grid; grid-template-columns: repeat(2, 54px); gap: 8px; pointer-events: auto;
+    }
+    .abtn {
+      width: 54px; height: 54px; border-radius: 50%; border: 2px solid #39ff8c; background: #0c1a12;
+      color: #eaffea; font-weight: 700; font-size: 14px; touch-action: none;
+    }
+    .abtn.pressed { background: #39ff8c; color: #041006; }
+    .abtn.block { border-color: #6fb8ff; }
+    .abtn.block.pressed { background: #6fb8ff; }
+    .abtn.special { border-color: #ff8a3b; }
+    .abtn.special.pressed { background: #ff8a3b; }
+  </style>
 </head>
 <body>
-<div id="app">
-  <canvas id="screen" width="350" height="550"></canvas>
+  <div id="app">
+    <canvas id="screen" width="350" height="550"></canvas>
 
-  <!-- HUD LAYER (populated by src/ui/hud.js) -->
-  <div class="hud" id="hud" style="display:none;">
-    <div class="name-row">
-      <div class="p1">
-        <div id="p1name">YOU</div>
-        <div class="bar-track"><div class="bar-fill" id="p1bar" style="width:100%"></div></div>
-        <div class="meter-track"><div class="meter-fill" id="p1meter"></div></div>
-        <div class="round-pips" id="p1pips"></div>
-      </div>
-      <div class="p2">
-        <div id="p2name">RIVAL</div>
-        <div class="bar-track"><div class="bar-fill" id="p2bar" style="width:100%"></div></div>
-        <div class="meter-track" style="margin-left:auto;"><div class="meter-fill" id="p2meter" style="float:right;"></div></div>
-        <div class="round-pips" id="p2pips"></div>
+    <div id="titleOverlay" class="overlay">
+      <div class="panel">
+        <h1>MOBATTLE</h1>
+        <p>TOUCH ONLY</p>
+        <div class="sub">ANDROID CHROME • 350×550</div>
+        <button id="startBtn" class="menu-btn">TAP TO BEGIN</button>
       </div>
     </div>
-  </div>
-  <div class="timer" id="timer" style="display:none;">99</div>
-  <div class="kchip" id="kchip" style="display:none;"></div>
-  <div class="flash-banner" id="flashBanner" style="display:none;"></div>
 
-  <!-- CONTROL LAYER (bound by src/input/input.js) — touch only, no fallback -->
-  <div class="controls" id="controls" style="display:none;">
-    <div class="stick" id="stick"><div class="stick-nub" id="stickNub"></div></div>
-    <div class="action-grid">
-      <div class="abtn" id="btnPunch">P</div>
-      <div class="abtn" id="btnKick">K</div>
-      <div class="abtn block" id="btnBlock">B</div>
-      <div class="abtn special" id="btnSpecial">S</div>
+    <div id="hud" class="hud hidden">
+      <div class="bar-row">
+        <div class="label">YOU</div>
+        <div class="bar"><div id="p1Bar" class="fill"></div></div>
+      </div>
+      <div class="bar-row right">
+        <div class="bar"><div id="p2Bar" class="fill enemy"></div></div>
+        <div class="label">RIVAL</div>
+      </div>
+      <div class="hud-stats">
+        <div id="timerText" class="pill">TIME 99</div>
+        <div id="comboText" class="pill">COMBO 0</div>
+      </div>
+      <div id="statusText" class="status">READY</div>
+    </div>
+
+    <div id="controls" class="controls hidden">
+      <div id="stick" class="stick"><div id="stickNub" class="stick-nub"></div></div>
+      <div class="action-grid">
+        <button id="btnPunch" class="abtn">P</button>
+        <button id="btnKick" class="abtn">K</button>
+        <button id="btnBlock" class="abtn block">B</button>
+        <button id="btnSpecial" class="abtn special">S</button>
+      </div>
+    </div>
+
+    <div id="resultOverlay" class="overlay hidden">
+      <div class="panel">
+        <h2 id="resultTitle">YOU WIN</h2>
+        <p id="resultText">PLAY AGAIN?</p>
+        <button id="retryBtn" class="menu-btn">PLAY AGAIN</button>
+      </div>
     </div>
   </div>
 
-  <!-- MENU / SCENE LAYER (driven by src/scenes/scenes.js) -->
-  <div class="menu" id="menuTitle">
-    <div class="title-glow">M O B A T T L E</div>
-    <div class="sub-glow">ONE FIGHTER. ONE RIVAL. NO MERCY.</div>
-    <div class="record-line" id="recordLine" style="display:none;"></div>
-    <div id="bootLines"></div>
-    <button class="menu-btn" id="btnStart" style="display:none;">TAP TO BEGIN</button>
-  </div>
-
-  <div class="menu hidden" id="menuReady">
-    <div class="title-glow" style="font-size:20px;">READY?</div>
-    <div class="vs-row">
-      <div class="vs-chip">YOU</div>
-      <div class="vs-word">VS</div>
-      <div class="vs-chip">RIVAL</div>
-    </div>
-    <button class="menu-btn" id="btnFight">FIGHT</button>
-  </div>
-
-  <div class="menu hidden" id="menuRoundEnd">
-    <div class="title-glow" id="roundEndTitle" style="font-size:22px;">ROUND 1</div>
-    <div class="sub-glow" id="roundEndSub">—</div>
-    <button class="menu-btn" id="btnNextRound">CONTINUE</button>
-  </div>
-
-  <div class="menu hidden" id="menuChampion">
-    <div class="title-glow" style="font-size:22px;">CHAMPION</div>
-    <div class="sub-glow" id="championName">—</div>
-    <button class="menu-btn" id="btnRematch">REMATCH</button>
-    <button class="menu-btn" id="btnMainMenu">MAIN MENU</button>
-  </div>
-
-  <div class="menu hidden" id="menuGameOver">
-    <div class="title-glow" style="font-size:22px; color:#ff5555; text-shadow:0 0 10px #ff3b3b;">TAPPED OUT</div>
-    <div class="sub-glow" id="gameOverSub">—</div>
-    <button class="menu-btn" id="btnRetry">RETRY</button>
-    <button class="menu-btn" id="btnMainMenu2">MAIN MENU</button>
-  </div>
-
-  <div class="scanlines"></div>
-  <div class="crt-vignette"></div>
-</div>
-
-<!-- Single module entry point — everything else lives in src/ -->
-<script type="module" src="./src/boot/boot.js"></script>
+  <script type="module" src="./boot.js"></script>
 </body>
 </html>

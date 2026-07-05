@@ -27,7 +27,10 @@ const state = {
   stickOriginY: 0,
   flashText: '',
   flashTimer: 0,
-  roundTimer: 99
+  roundTimer: 99,
+  round: 1,
+  roundWins: [0, 0],
+  transitionTimer: 0
 };
 
 function clamp(value, min, max) {
@@ -51,7 +54,19 @@ function createFighter(x, side) {
   };
 }
 
-function resetMatch() {
+function hideOverlay() {
+  resultOverlay.classList.add('hidden');
+}
+
+function showOverlay(title, text) {
+  resultTitle.textContent = title;
+  resultText.textContent = text;
+  resultOverlay.classList.remove('hidden');
+  hud.classList.add('hidden');
+  controls.classList.add('hidden');
+}
+
+function startRound() {
   state.player = createFighter(90, 1);
   state.enemy = createFighter(260, -1);
   state.scene = 'fight';
@@ -61,22 +76,38 @@ function resetMatch() {
   inputState.kick = false;
   inputState.block = false;
   inputState.special = false;
-  state.flashText = 'FIGHT!';
+  state.flashText = `ROUND ${state.round}`;
   state.flashTimer = 0.8;
   state.roundTimer = 99;
+  state.transitionTimer = 0;
   titleOverlay.classList.add('hidden');
-  resultOverlay.classList.add('hidden');
+  hideOverlay();
   hud.classList.remove('hidden');
   controls.classList.remove('hidden');
 }
 
+function resetMatch() {
+  state.round = 1;
+  state.roundWins = [0, 0];
+  startRound();
+}
+
 function showResult(title, text) {
   state.scene = 'result';
-  resultTitle.textContent = title;
-  resultText.textContent = text;
-  resultOverlay.classList.remove('hidden');
-  hud.classList.add('hidden');
-  controls.classList.add('hidden');
+  showOverlay(title, text);
+}
+
+function showRoundTransition(winnerSide) {
+  state.scene = 'transition';
+  state.transitionTimer = 1.3;
+  const playerWon = winnerSide === 1;
+  if (playerWon) state.roundWins[0] += 1; else state.roundWins[1] += 1;
+  if (state.roundWins[0] >= 2 || state.roundWins[1] >= 2) {
+    showResult(playerWon ? 'YOU WIN' : 'RIVAL WINS', 'MATCH COMPLETE — TAP TO PLAY AGAIN');
+    return;
+  }
+  state.round += 1;
+  showOverlay(`ROUND ${state.round}`, `${playerWon ? 'YOU' : 'RIVAL'} TAKES THE ROUND`);
 }
 
 function applyAttack(attacker, target, damage, kind) {
@@ -96,7 +127,7 @@ function applyAttack(attacker, target, damage, kind) {
   target.comboTimer = 0;
 
   if (target.hp <= 0) {
-    showResult(attacker === state.player ? 'YOU WIN' : 'RIVAL WINS', attacker === state.player ? 'TAP TO PLAY AGAIN' : 'TRY AGAIN');
+    showRoundTransition(attacker === state.player ? 1 : -1);
   }
 }
 
@@ -255,6 +286,14 @@ function draw() {
 }
 
 function step(dt) {
+  if (state.scene === 'transition') {
+    state.transitionTimer = Math.max(0, state.transitionTimer - dt);
+    if (state.transitionTimer <= 0) {
+      startRound();
+    }
+    return;
+  }
+
   if (state.scene !== 'fight' || !state.player || !state.enemy) return;
 
   state.flashTimer = Math.max(0, state.flashTimer - dt);
